@@ -1,317 +1,258 @@
 import React, { useState, useEffect } from 'react';
 import {
   Box,
+  Button,
   Card,
   CardContent,
-  Typography,
-  TextField,
-  Button,
-  IconButton,
-  Grid,
-  Chip,
   Dialog,
-  DialogTitle,
-  DialogContent,
   DialogActions,
-  Alert,
+  DialogContent,
+  DialogTitle,
+  Grid,
+  IconButton,
   Snackbar,
-  useTheme,
+  TextField,
+  Typography,
+  Alert,
+  Tooltip,
+  Paper,
 } from '@mui/material';
-import {
-  Add as AddIcon,
-  Delete as DeleteIcon,
-  Edit as EditIcon,
-} from '@mui/icons-material';
-import { motion } from 'framer-motion';
+import DeleteIcon from '@mui/icons-material/Delete';
+import EditIcon from '@mui/icons-material/Edit';
+import InfoIcon from '@mui/icons-material/Info';
+import { llmPricingService } from '../services/llmPricingService';
+import { LLMService } from '../services/llmService';
 
 interface LLMConfig {
   id: string;
   name: string;
   apiKey: string;
-  baseUrl?: string;
   model: string;
   maxTokens: number;
   temperature: number;
-  costPer1kTokens: number;
+  baseUrl?: string;
 }
 
-const defaultLLMs: LLMConfig[] = [
-  {
-    id: 'gpt-4',
-    name: 'GPT-4',
-    apiKey: '',
-    model: 'gpt-4',
-    maxTokens: 8192,
-    temperature: 0.7,
-    costPer1kTokens: 0.03,
-  },
-  {
-    id: 'gpt-3.5-turbo',
-    name: 'GPT-3.5 Turbo',
-    apiKey: '',
-    model: 'gpt-3.5-turbo',
-    maxTokens: 4096,
-    temperature: 0.7,
-    costPer1kTokens: 0.002,
-  },
-];
-
 const ApiConfigPage: React.FC = () => {
-  const theme = useTheme();
-  const [llms, setLLMs] = useState<LLMConfig[]>([]);
+  const [llms, setLlms] = useState<LLMConfig[]>([]);
   const [openDialog, setOpenDialog] = useState(false);
-  const [currentLLM, setCurrentLLM] = useState<LLMConfig | null>(null);
+  const [selectedLLM, setSelectedLLM] = useState<LLMConfig | null>(null);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' as 'success' | 'error' });
+  const [prices, setPrices] = useState<Map<string, { inputPrice: number; outputPrice: number }>>(new Map());
 
   useEffect(() => {
-    const savedLLMs = localStorage.getItem('llmConfigs');
-    if (savedLLMs) {
-      setLLMs(JSON.parse(savedLLMs));
-    } else {
-      setLLMs(defaultLLMs);
-    }
+    const loadedLLMs = LLMService.getInstance().getConfigurations();
+    setLlms(loadedLLMs);
+    
+    // Load pricing information
+    const pricingMap = llmPricingService.getAllPrices();
+    const simplifiedPrices = new Map();
+    pricingMap.forEach((pricing, model) => {
+      simplifiedPrices.set(model, {
+        inputPrice: pricing.inputPrice,
+        outputPrice: pricing.outputPrice
+      });
+    });
+    setPrices(simplifiedPrices);
+
+    // Update prices if needed
+    llmPricingService.updatePrices();
   }, []);
 
-  const handleSave = (llm: LLMConfig) => {
-    const newLLMs = currentLLM
-      ? llms.map((l) => (l.id === currentLLM.id ? llm : l))
-      : [...llms, { ...llm, id: Date.now().toString() }];
-    
-    setLLMs(newLLMs);
-    localStorage.setItem('llmConfigs', JSON.stringify(newLLMs));
-    setOpenDialog(false);
-    setSnackbar({
-      open: true,
-      message: `LLM ${currentLLM ? 'updated' : 'added'} successfully!`,
-      severity: 'success',
-    });
+  const handleSave = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const formData = new FormData(event.currentTarget);
+    const newLLM: LLMConfig = {
+      id: selectedLLM?.id || Date.now().toString(),
+      name: formData.get('name') as string,
+      apiKey: formData.get('apiKey') as string,
+      model: formData.get('model') as string,
+      maxTokens: parseInt(formData.get('maxTokens') as string),
+      temperature: parseFloat(formData.get('temperature') as string),
+      baseUrl: formData.get('baseUrl') as string,
+    };
+
+    try {
+      // Test connection before saving
+      await LLMService.getInstance().testConnection(newLLM);
+      
+      if (selectedLLM) {
+        LLMService.getInstance().updateConfiguration(newLLM);
+      } else {
+        LLMService.getInstance().addConfiguration(newLLM);
+      }
+      
+      setLlms(LLMService.getInstance().getConfigurations());
+      setOpenDialog(false);
+      setSnackbar({ open: true, message: 'LLM configuration saved successfully!', severity: 'success' });
+    } catch (error) {
+      setSnackbar({ 
+        open: true, 
+        message: `Failed to save LLM configuration: ${error instanceof Error ? error.message : 'Unknown error'}`, 
+        severity: 'error' 
+      });
+    }
   };
 
   const handleDelete = (id: string) => {
-    const newLLMs = llms.filter((llm) => llm.id !== id);
-    setLLMs(newLLMs);
-    localStorage.setItem('llmConfigs', JSON.stringify(newLLMs));
-    setSnackbar({
-      open: true,
-      message: 'LLM removed successfully!',
-      severity: 'success',
-    });
+    LLMService.getInstance().deleteConfiguration(id);
+    setLlms(LLMService.getInstance().getConfigurations());
+    setSnackbar({ open: true, message: 'LLM configuration deleted successfully!', severity: 'success' });
   };
 
   const handleEdit = (llm: LLMConfig) => {
-    setCurrentLLM(llm);
+    setSelectedLLM(llm);
     setOpenDialog(true);
+  };
+
+  const getPriceInfo = (model: string) => {
+    const pricing = llmPricingService.getPricing(model);
+    if (!pricing) return 'Pricing not available';
+    return `Input: $${pricing.inputPrice}/1k tokens | Output: $${pricing.outputPrice}/1k tokens`;
   };
 
   return (
     <Box sx={{ p: 3 }}>
-      <motion.div
-        initial={{ opacity: 0, y: 20 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.5 }}
-      >
-        <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 4 }}>
-          <Typography variant="h4" sx={{ mb: 2 }}>
-            API Configuration
-          </Typography>
-          <Button
-            variant="contained"
-            startIcon={<AddIcon />}
-            onClick={() => {
-              setCurrentLLM(null);
-              setOpenDialog(true);
-            }}
-            sx={{
-              background: `linear-gradient(45deg, ${theme.palette.primary.main} 30%, ${theme.palette.secondary.main} 90%)`,
-            }}
-          >
-            Add New LLM
-          </Button>
-        </Box>
-
-        <Grid container spacing={3}>
-          {llms.map((llm) => (
-            <Grid item xs={12} md={6} key={llm.id}>
-              <motion.div
-                initial={{ opacity: 0, scale: 0.9 }}
-                animate={{ opacity: 1, scale: 1 }}
-                transition={{ duration: 0.3 }}
-              >
-                <Card
-                  sx={{
-                    height: '100%',
-                    display: 'flex',
-                    flexDirection: 'column',
-                    position: 'relative',
-                    '&:hover': {
-                      boxShadow: 6,
-                    },
-                  }}
-                >
-                  <CardContent>
-                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
-                      <Typography variant="h6">{llm.name}</Typography>
-                      <Box>
-                        <IconButton onClick={() => handleEdit(llm)} size="small">
-                          <EditIcon />
-                        </IconButton>
-                        <IconButton onClick={() => handleDelete(llm.id)} size="small" color="error">
-                          <DeleteIcon />
-                        </IconButton>
-                      </Box>
-                    </Box>
-                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                      Model: {llm.model}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                      Max Tokens: {llm.maxTokens}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary" gutterBottom>
-                      Temperature: {llm.temperature}
-                    </Typography>
-                    <Typography variant="body2" color="text.secondary">
-                      Cost per 1k tokens: ${llm.costPer1kTokens}
-                    </Typography>
-                    <Box sx={{ mt: 2 }}>
-                      <Chip
-                        label={llm.apiKey ? 'API Key Set' : 'No API Key'}
-                        color={llm.apiKey ? 'success' : 'error'}
-                        size="small"
-                      />
-                    </Box>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            </Grid>
-          ))}
-        </Grid>
-
-        <LLMConfigDialog
-          open={openDialog}
-          onClose={() => setOpenDialog(false)}
-          onSave={handleSave}
-          initialData={currentLLM}
-        />
-
-        <Snackbar
-          open={snackbar.open}
-          autoHideDuration={6000}
-          onClose={() => setSnackbar({ ...snackbar, open: false })}
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 3 }}>
+        <Typography variant="h4" component="h1">
+          API Configuration
+        </Typography>
+        <Button
+          variant="contained"
+          color="primary"
+          onClick={() => {
+            setSelectedLLM(null);
+            setOpenDialog(true);
+          }}
         >
-          <Alert severity={snackbar.severity} sx={{ width: '100%' }}>
-            {snackbar.message}
-          </Alert>
-        </Snackbar>
-      </motion.div>
-    </Box>
-  );
-};
+          Add New LLM
+        </Button>
+      </Box>
 
-interface LLMConfigDialogProps {
-  open: boolean;
-  onClose: () => void;
-  onSave: (llm: LLMConfig) => void;
-  initialData: LLMConfig | null;
-}
+      <Grid container spacing={3}>
+        {llms.map((llm) => (
+          <Grid item xs={12} md={6} lg={4} key={llm.id}>
+            <Card>
+              <CardContent>
+                <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                  <Typography variant="h6" component="h2">
+                    {llm.name}
+                  </Typography>
+                  <Box>
+                    <IconButton onClick={() => handleEdit(llm)} size="small">
+                      <EditIcon />
+                    </IconButton>
+                    <IconButton onClick={() => handleDelete(llm.id)} size="small" color="error">
+                      <DeleteIcon />
+                    </IconButton>
+                  </Box>
+                </Box>
 
-const LLMConfigDialog: React.FC<LLMConfigDialogProps> = ({
-  open,
-  onClose,
-  onSave,
-  initialData,
-}) => {
-  const [formData, setFormData] = useState<LLMConfig>({
-    id: '',
-    name: '',
-    apiKey: '',
-    model: '',
-    maxTokens: 2048,
-    temperature: 0.7,
-    costPer1kTokens: 0,
-  });
+                <Typography color="textSecondary" gutterBottom>
+                  Model: {llm.model}
+                </Typography>
 
-  useEffect(() => {
-    if (initialData) {
-      setFormData(initialData);
-    } else {
-      setFormData({
-        id: '',
-        name: '',
-        apiKey: '',
-        model: '',
-        maxTokens: 2048,
-        temperature: 0.7,
-        costPer1kTokens: 0,
-      });
-    }
-  }, [initialData]);
+                <Paper sx={{ p: 1, mt: 1, bgcolor: 'background.default' }}>
+                  <Typography variant="body2" sx={{ display: 'flex', alignItems: 'center' }}>
+                    <Tooltip title="Current pricing information">
+                      <InfoIcon sx={{ mr: 1, fontSize: '1rem' }} />
+                    </Tooltip>
+                    {getPriceInfo(llm.model)}
+                  </Typography>
+                </Paper>
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    onSave(formData);
-  };
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Max Tokens: {llm.maxTokens}
+                </Typography>
+                <Typography variant="body2">
+                  Temperature: {llm.temperature}
+                </Typography>
+                {llm.baseUrl && (
+                  <Typography variant="body2">
+                    Base URL: {llm.baseUrl}
+                  </Typography>
+                )}
+              </CardContent>
+            </Card>
+          </Grid>
+        ))}
+      </Grid>
 
-  return (
-    <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
-      <form onSubmit={handleSubmit}>
-        <DialogTitle>{initialData ? 'Edit LLM' : 'Add New LLM'}</DialogTitle>
-        <DialogContent>
-          <Box sx={{ display: 'flex', flexDirection: 'column', gap: 2, mt: 2 }}>
+      <Dialog open={openDialog} onClose={() => setOpenDialog(false)} maxWidth="sm" fullWidth>
+        <form onSubmit={handleSave}>
+          <DialogTitle>{selectedLLM ? 'Edit LLM Configuration' : 'Add New LLM Configuration'}</DialogTitle>
+          <DialogContent>
             <TextField
+              margin="normal"
+              required
+              fullWidth
               label="Name"
-              value={formData.name}
-              onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-              required
+              name="name"
+              defaultValue={selectedLLM?.name}
             />
             <TextField
+              margin="normal"
+              required
+              fullWidth
               label="API Key"
-              value={formData.apiKey}
-              onChange={(e) => setFormData({ ...formData, apiKey: e.target.value })}
-              required
+              name="apiKey"
               type="password"
+              defaultValue={selectedLLM?.apiKey}
             />
             <TextField
+              margin="normal"
+              required
+              fullWidth
               label="Model"
-              value={formData.model}
-              onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+              name="model"
+              defaultValue={selectedLLM?.model}
+            />
+            <TextField
+              margin="normal"
               required
-            />
-            <TextField
-              label="Base URL (Optional)"
-              value={formData.baseUrl}
-              onChange={(e) => setFormData({ ...formData, baseUrl: e.target.value })}
-            />
-            <TextField
+              fullWidth
               label="Max Tokens"
+              name="maxTokens"
               type="number"
-              value={formData.maxTokens}
-              onChange={(e) => setFormData({ ...formData, maxTokens: Number(e.target.value) })}
-              required
+              defaultValue={selectedLLM?.maxTokens}
             />
             <TextField
+              margin="normal"
+              required
+              fullWidth
               label="Temperature"
+              name="temperature"
               type="number"
               inputProps={{ step: 0.1, min: 0, max: 2 }}
-              value={formData.temperature}
-              onChange={(e) => setFormData({ ...formData, temperature: Number(e.target.value) })}
-              required
+              defaultValue={selectedLLM?.temperature}
             />
             <TextField
-              label="Cost per 1k tokens ($)"
-              type="number"
-              inputProps={{ step: 0.001 }}
-              value={formData.costPer1kTokens}
-              onChange={(e) => setFormData({ ...formData, costPer1kTokens: Number(e.target.value) })}
-              required
+              margin="normal"
+              fullWidth
+              label="Base URL (Optional)"
+              name="baseUrl"
+              defaultValue={selectedLLM?.baseUrl}
             />
-          </Box>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="contained">Save</Button>
-        </DialogActions>
-      </form>
-    </Dialog>
+          </DialogContent>
+          <DialogActions>
+            <Button onClick={() => setOpenDialog(false)}>Cancel</Button>
+            <Button type="submit" variant="contained" color="primary">
+              Save
+            </Button>
+          </DialogActions>
+        </form>
+      </Dialog>
+
+      <Snackbar
+        open={snackbar.open}
+        autoHideDuration={6000}
+        onClose={() => setSnackbar({ ...snackbar, open: false })}
+      >
+        <Alert severity={snackbar.severity} onClose={() => setSnackbar({ ...snackbar, open: false })}>
+          {snackbar.message}
+        </Alert>
+      </Snackbar>
+    </Box>
   );
 };
 
